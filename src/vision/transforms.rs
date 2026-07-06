@@ -178,9 +178,79 @@ pub fn to_tensor_no_norm(image: &DynamicImage) -> Array3<f32> {
     build_planar_tensor(&raw, w, h, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0])
 }
 
+/// Number of distinct levels a `to_tensor` output can take per channel:
+/// `v / 255` for u8 `v` in `0..256`. `normalize` is always called on such
+/// quantized input, which is what makes a 256-entry LUT exact for it.
+const NORMALIZE_LUT_LEVELS: usize = 256;
+
+/// Precompute the per-channel `(v/255 - mean) / std` lookup table, indexed by
+/// the original u8 pixel value `v`.
+fn build_normalize_lut(mean: &[f64; 3], std: &[f64; 3]) -> [[f32; NORMALIZE_LUT_LEVELS]; 3] {
+    std::array::from_fn(|c| {
+        let mean_c = mean[c] as f32;
+        let inv_std_c = 1.0 / std[c] as f32;
+        std::array::from_fn(|v| (v as f32 / 255.0 - mean_c) * inv_std_c)
+    })
+}
+
+/// Recover the `0..256` grid index for a `to_tensor`-produced value (`v/255`).
+/// Rounds to the nearest level and clamps so off-grid callers still get a
+/// bounded (if approximate) result instead of an out-of-bounds index.
+#[inline]
+fn normalize_lut_index(x: f32) -> usize {
+    (x * 255.0).round().clamp(0.0, 255.0) as usize
+}
+
+type NormalizeLutTable = [[f32; NORMALIZE_LUT_LEVELS]; 3];
+
+/// Cache entry: the `(mean, std)` a [`NormalizeLutTable`] was built for, plus
+/// the table itself.
+struct NormalizeLutCacheEntry {
+    mean: [f64; 3],
+    std: [f64; 3],
+    table: NormalizeLutTable,
+}
+
+thread_local! {
+    // Callers invoke `normalize` with the same (mean, std) on every image of
+    // a batch, so cache the last-built table and only rebuild on change.
+    static NORMALIZE_LUT_CACHE: RefCell<Option<NormalizeLutCacheEntry>> =
+        const { RefCell::new(None) };
+}
+
+/// Fetch the cached LUT for `(mean, std)`, rebuilding it only if the cache is
+/// empty or was built for different parameters.
+fn cached_normalize_lut(mean: &[f64; 3], std: &[f64; 3]) -> NormalizeLutTable {
+    NORMALIZE_LUT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let stale = !matches!(&*cache, Some(entry) if &entry.mean == mean && &entry.std == std);
+        if stale {
+            *cache = Some(NormalizeLutCacheEntry {
+                mean: *mean,
+                std: *std,
+                table: build_normalize_lut(mean, std),
+            });
+        }
+        #[expect(
+            clippy::expect_used,
+            reason = "just populated above when empty or stale"
+        )]
+        cache.as_ref().expect("cache populated above").table
+    })
+}
+
 /// Normalize tensor per channel: (x - mean) / std.
 ///
 /// This matches `torchvision.transforms.Normalize(mean, std)`.
+///
+/// Implemented via a precomputed per-channel LUT: `output[c, ...] = lut[c,
+/// v]`, where `v` is the original u8 pixel value recovered from the
+/// `to_tensor` grid value. This is exact for `to_tensor` output (its values
+/// are always `v/255`); values that don't fall on that grid are rounded to
+/// the nearest level. The table itself is cached per-thread and only rebuilt
+/// when `mean`/`std` change, so repeated calls with the same normalization
+/// parameters (the common case: one processor, many images) skip rebuilding
+/// it entirely.
 ///
 /// # Arguments
 /// * `tensor` - Input tensor of shape [C, H, W]
@@ -189,24 +259,20 @@ pub fn to_tensor_no_norm(image: &DynamicImage) -> Array3<f32> {
 pub fn normalize(tensor: &mut Array3<f32>, mean: &[f64; 3], std: &[f64; 3]) {
     let [h, w] = [tensor.shape()[1], tensor.shape()[2]];
     let pixels = h * w;
+    let lut = cached_normalize_lut(mean, std);
 
     if let Some(flat) = tensor.as_slice_mut() {
         // Fast path: contiguous memory, process channel planes directly
-        for c in 0..3 {
-            let mean_c = mean[c] as f32;
-            let inv_std_c = 1.0 / std[c] as f32;
-            let plane = &mut flat[c * pixels..(c + 1) * pixels];
+        for (table, plane) in lut.iter().zip(flat.chunks_mut(pixels)) {
             for v in plane.iter_mut() {
-                *v = (*v - mean_c) * inv_std_c;
+                *v = table[normalize_lut_index(*v)];
             }
         }
     } else {
-        for c in 0..3 {
-            let mean_c = mean[c] as f32;
-            let std_c = std[c] as f32;
+        for (c, table) in lut.iter().enumerate() {
             tensor
                 .slice_mut(s![c, .., ..])
-                .mapv_inplace(|v| (v - mean_c) / std_c);
+                .mapv_inplace(|v| table[normalize_lut_index(v)]);
         }
     }
 }
@@ -947,16 +1013,64 @@ mod tests {
 
     #[test]
     fn test_normalize() {
-        let mut tensor = Array3::<f32>::from_elem((3, 2, 2), 0.5);
-        let mean = [0.5, 0.5, 0.5];
+        // 128/255 sits exactly on the `to_tensor` grid, so the LUT recovers
+        // it exactly (unlike an arbitrary value such as 0.5).
+        let grid_value = 128.0_f32 / 255.0;
+        let mut tensor = Array3::<f32>::from_elem((3, 2, 2), grid_value);
+        let mean = [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0];
         let std = [0.5, 0.5, 0.5];
 
         normalize(&mut tensor, &mean, &std);
 
-        // (0.5 - 0.5) / 0.5 = 0.0
+        // (128/255 - 128/255) / 0.5 = 0.0
         for val in &tensor {
             assert!(val.abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn test_normalize_lut_matches_naive_arithmetic_on_grid() {
+        let mean = [0.485, 0.456, 0.406];
+        let std = [0.229, 0.224, 0.225];
+
+        // Every one of the 256 `to_tensor` grid values, per channel.
+        let mut tensor = Array3::<f32>::zeros((3, 1, 256));
+        for c in 0..3 {
+            for v in 0..256 {
+                tensor[[c, 0, v]] = v as f32 / 255.0;
+            }
+        }
+
+        let mut expected = tensor.clone();
+        for c in 0..3 {
+            let mean_c = mean[c] as f32;
+            let std_c = std[c] as f32;
+            expected
+                .slice_mut(s![c, .., ..])
+                .mapv_inplace(|v| (v - mean_c) / std_c);
+        }
+
+        normalize(&mut tensor, &mean, &std);
+
+        for ((c, y, x), &actual) in tensor.indexed_iter() {
+            let exp = expected[[c, y, x]];
+            assert!(
+                (actual - exp).abs() < 1e-5,
+                "mismatch at [{c},{y},{x}]: lut={actual}, naive={exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_lut_index_rounds_and_clamps_off_grid() {
+        // Off-grid / out-of-range inputs must not panic and should map to a
+        // sane clamped level rather than reading out of bounds.
+        assert_eq!(normalize_lut_index(-1.0), 0);
+        assert_eq!(normalize_lut_index(0.0), 0);
+        assert_eq!(normalize_lut_index(1.0), 255);
+        assert_eq!(normalize_lut_index(2.0), 255);
+        // 0.503 * 255 = 128.265 -> rounds to 128
+        assert_eq!(normalize_lut_index(0.503), 128);
     }
 
     #[test]
