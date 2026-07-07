@@ -81,11 +81,12 @@ impl Qwen3VLVisionSpec {
             .unwrap_or_default()
     }
 
-    fn qwen3_5_video_replacement_tokens(
+    fn video_replacement_tokens(
         metadata: &ModelMetadata,
         pad_token_id: TokenId,
         num_tokens: usize,
         grid_t: usize,
+        include_timestamps: bool,
     ) -> Option<Vec<TokenId>> {
         if grid_t <= 1 || num_tokens == 0 || !num_tokens.is_multiple_of(grid_t) {
             return None;
@@ -98,8 +99,7 @@ impl Qwen3VLVisionSpec {
             .config_u32(&["vision_config", "temporal_patch_size"])
             .unwrap_or(2) as f64;
         // SMG currently samples Qwen videos at the HF default 2 fps. Match HF's
-        // prompt timestamp convention: timestamp each temporal patch by the
-        // average frame time and format it with one decimal place.
+        // prompt timestamp convention for Qwen3.5 video prompts.
         let sample_fps = 2.0_f64;
 
         for grid_idx in 0..grid_t {
@@ -109,10 +109,12 @@ impl Qwen3VLVisionSpec {
             if grid_idx > 0 {
                 tokens.push(vision_end);
             }
-            tokens.extend(Self::encode_plain_text(
-                metadata,
-                &format!("<{seconds:.1} seconds>"),
-            ));
+            if include_timestamps {
+                tokens.extend(Self::encode_plain_text(
+                    metadata,
+                    &format!("<{seconds:.1} seconds>"),
+                ));
+            }
             if grid_idx > 0 {
                 tokens.push(vision_start);
             }
@@ -235,20 +237,17 @@ impl ModelProcessorSpec for Qwen3VLVisionSpec {
                     .feature_token_counts
                     .iter()
                     .map(|&num_tokens| {
-                        let tokens = if Self::is_qwen3_5(metadata) {
-                            video_grid_t
-                                .and_then(|grid_t| {
-                                    Self::qwen3_5_video_replacement_tokens(
-                                        metadata,
-                                        pad_token_id,
-                                        num_tokens,
-                                        grid_t,
-                                    )
-                                })
-                                .unwrap_or_else(|| vec![pad_token_id; num_tokens])
-                        } else {
-                            vec![pad_token_id; num_tokens]
-                        };
+                        let tokens = video_grid_t
+                            .and_then(|grid_t| {
+                                Self::video_replacement_tokens(
+                                    metadata,
+                                    pad_token_id,
+                                    num_tokens,
+                                    grid_t,
+                                    Self::is_qwen3_5(metadata),
+                                )
+                            })
+                            .unwrap_or_else(|| vec![pad_token_id; num_tokens]);
                         PromptReplacement::sequence(Modality::Video, &placeholder_token, tokens)
                     })
                     .collect())
@@ -268,6 +267,10 @@ impl ModelProcessorSpec for Qwen3VLVisionSpec {
             (
                 "pixel_values".to_string(),
                 FieldLayout::flat("patches_per_image"),
+            ),
+            (
+                "pixel_values_videos".to_string(),
+                FieldLayout::flat("patches_per_video"),
             ),
             ("image_grid_thw".to_string(), FieldLayout::Batched),
             ("patches_per_image".to_string(), FieldLayout::Batched),
