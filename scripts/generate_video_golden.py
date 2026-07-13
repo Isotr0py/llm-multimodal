@@ -4,12 +4,10 @@
 import argparse
 import json
 from pathlib import Path
-from types import MethodType
 
 import av
 import numpy as np
 from transformers import AutoProcessor
-from transformers.video_utils import load_video
 
 FRAME_COUNT, FPS, WIDTH, HEIGHT, SAMPLE_FPS = 30, 5, 96, 64, 2
 
@@ -18,24 +16,6 @@ MODEL_IDS = {
     "qwen2_vl": "Qwen/Qwen2-VL-2B-Instruct",
     "qwen3_vl": "Qwen/Qwen3-VL-2B-Instruct",
 }
-
-
-def fetch_videos_with_pyav(self, video_or_videos, sample_indices_fn=None):
-    """Use PyAV when TorchCodec is installed but lacks shared libraries."""
-    if isinstance(video_or_videos, list):
-        return list(
-            zip(
-                *[
-                    self.fetch_videos(video, sample_indices_fn=sample_indices_fn)
-                    for video in video_or_videos
-                ]
-            )
-        )
-    return load_video(
-        video_or_videos,
-        backend="pyav",
-        sample_indices_fn=sample_indices_fn,
-    )
 
 
 def generate_source_video(path: Path) -> None:
@@ -87,7 +67,6 @@ def rust_processor_config(processor) -> dict:
 def generate_model_golden(model: str, video_path: Path, output_dir: Path) -> None:
     processor = AutoProcessor.from_pretrained(MODEL_IDS[model])
     video_processor = processor.video_processor
-    video_processor.fetch_videos = MethodType(fetch_videos_with_pyav, video_processor)
     conversation = [
         {
             "role": "user",
@@ -139,7 +118,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     video_path = args.output_dir / "qwen_sampling.mp4"
     generate_source_video(video_path)
-    for model in ("qwen2_vl", "qwen3_vl"):
+    for model in MODEL_IDS.keys():
         generate_model_golden(model, video_path, args.output_dir)
 
 
