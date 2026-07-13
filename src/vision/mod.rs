@@ -33,6 +33,7 @@ pub mod preprocessor_config;
 pub mod processor;
 pub mod processors;
 pub mod transforms;
+pub mod video_sampling;
 
 // Re-export commonly used types
 pub use preprocessor_config::PreProcessorConfig;
@@ -44,3 +45,4 @@ pub use processors::{
     Phi3VisionProcessor, Phi4VisionProcessor, PixtralProcessor, Qwen2VLProcessor, Qwen3VLProcessor,
 };
 pub use transforms::TransformError;
+pub use video_sampling::{Qwen2VlFrameSampler, Qwen3VlFrameSampler};

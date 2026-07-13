@@ -3,9 +3,13 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use crate::{
+    media::VideoFetchConfig,
     registry::{ModelMetadata, ModelProcessorSpec, ModelRegistryError, RegistryResult},
     types::{FieldLayout, Modality, PromptReplacement, TokenId},
-    vision::processor::{ModelSpecificValue, PreprocessedEncoderInputs},
+    vision::{
+        processor::{ModelSpecificValue, PreprocessedEncoderInputs},
+        video_sampling::Qwen3VlFrameSampler,
+    },
 };
 
 pub(super) struct Qwen3VLVisionSpec;
@@ -137,6 +141,15 @@ impl ModelProcessorSpec for Qwen3VLVisionSpec {
             || id.contains("qwen3.6")
             || model_type.is_some_and(|mt| mt == "qwen3_5" || mt == "qwen3_5_moe");
         is_qwen3_vl || is_qwen3_5
+    }
+
+    fn video_fetch_config(
+        &self,
+        _metadata: &ModelMetadata,
+    ) -> RegistryResult<Option<VideoFetchConfig>> {
+        Ok(Some(
+            VideoFetchConfig::default().with_frame_sampler(Qwen3VlFrameSampler),
+        ))
     }
 
     fn placeholder_token(&self, metadata: &ModelMetadata) -> RegistryResult<String> {
@@ -286,8 +299,10 @@ mod tests {
     use serde_json::json;
 
     use crate::{
+        media::sample_video_frame_indices,
         registry::{test_helpers::*, ModelMetadata, ModelRegistry},
         types::ImageSize,
+        video_sampling::VideoFrameMetadata,
         vision::processor::ModelSpecificValue,
     };
 
@@ -320,6 +335,27 @@ mod tests {
         assert_eq!(replacements[0].tokens.len(), 196);
         assert_eq!(replacements[0].tokens[0], 151655); // pad (image_token_id)
         assert_eq!(*replacements[0].tokens.last().unwrap(), 151655); // pad
+    }
+
+    #[test]
+    fn qwen3_registry_injects_uniform_fps_sampler() {
+        let tokenizer = TestTokenizer::new(&[]);
+        let config = json!({"model_type": "qwen3_vl"});
+        let metadata = ModelMetadata {
+            model_id: "Qwen3-VL-7B",
+            tokenizer: &tokenizer,
+            config: &config,
+        };
+        let video_config = ModelRegistry::new().video_fetch_config(&metadata).unwrap();
+        let indices = sample_video_frame_indices(
+            VideoFrameMetadata {
+                total_frames: 100,
+                original_fps: 25.0,
+            },
+            &video_config,
+        )
+        .unwrap();
+        assert_eq!(indices, vec![0, 14, 28, 42, 57, 71, 85, 99]);
     }
 
     #[test]

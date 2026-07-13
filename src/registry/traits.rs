@@ -4,6 +4,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
+    media::VideoFetchConfig,
     types::{FieldLayout, Modality, PromptReplacement, TokenId},
     vision::processor::PreprocessedEncoderInputs,
 };
@@ -113,6 +114,15 @@ pub trait ModelProcessorSpec: Send + Sync {
     fn modality_limits(&self, metadata: &ModelMetadata)
         -> RegistryResult<HashMap<Modality, usize>>;
     fn processor_kwargs(&self, metadata: &ModelMetadata) -> RegistryResult<Value>;
+    /// Build model-specific video loading and frame-sampling configuration.
+    ///
+    /// Models without custom video sampling can use the default implementation.
+    fn video_fetch_config(
+        &self,
+        _metadata: &ModelMetadata,
+    ) -> RegistryResult<Option<VideoFetchConfig>> {
+        Ok(None)
+    }
     /// Compute per-media prompt replacement token sequences.
     ///
     /// Receives the full preprocessed output so each model can extract whatever

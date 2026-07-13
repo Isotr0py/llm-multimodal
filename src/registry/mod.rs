@@ -51,6 +51,17 @@ impl ModelRegistry {
         }
         None
     }
+
+    /// Resolve the model and build its video loading configuration.
+    pub fn video_fetch_config(
+        &self,
+        metadata: &ModelMetadata,
+    ) -> RegistryResult<crate::media::VideoFetchConfig> {
+        let spec = self
+            .lookup(metadata)
+            .ok_or_else(|| ModelRegistryError::UnsupportedModel(metadata.model_id.to_string()))?;
+        Ok(spec.video_fetch_config(metadata)?.unwrap_or_default())
+    }
 }
 
 impl Default for ModelRegistry {

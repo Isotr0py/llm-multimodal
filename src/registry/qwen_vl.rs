@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use crate::{
+    media::VideoFetchConfig,
     registry::{ModelMetadata, ModelProcessorSpec, ModelRegistryError, RegistryResult},
     types::{FieldLayout, Modality, PromptReplacement, TokenId},
-    vision::processor::PreprocessedEncoderInputs,
+    vision::{processor::PreprocessedEncoderInputs, video_sampling::Qwen2VlFrameSampler},
 };
 
 pub(super) struct QwenVLVisionSpec;
@@ -55,6 +56,20 @@ impl ModelProcessorSpec for QwenVLVisionSpec {
         Ok(json!({}))
     }
 
+    fn video_fetch_config(
+        &self,
+        metadata: &ModelMetadata,
+    ) -> RegistryResult<Option<VideoFetchConfig>> {
+        let temporal_patch_size = metadata
+            .config_u32(&["vision_config", "temporal_patch_size"])
+            .unwrap_or(2) as usize;
+        Ok(Some(VideoFetchConfig::default().with_frame_sampler(
+            Qwen2VlFrameSampler {
+                temporal_patch_size,
+            },
+        )))
+    }
+
     fn prompt_replacements(
         &self,
         metadata: &ModelMetadata,
@@ -98,8 +113,10 @@ mod tests {
     use serde_json::json;
 
     use crate::{
+        media::sample_video_frame_indices,
         registry::{test_helpers::*, ModelMetadata, ModelRegistry},
         types::ImageSize,
+        video_sampling::VideoFrameMetadata,
     };
 
     #[test]
@@ -149,5 +166,29 @@ mod tests {
         let registry = ModelRegistry::new();
         let spec = registry.lookup(&metadata).expect("should match qwen alias");
         assert_eq!(spec.name(), "qwen_vl");
+    }
+
+    #[test]
+    fn qwen2_registry_injects_temporal_patch_sampler() {
+        let tokenizer = TestTokenizer::new(&[]);
+        let config = json!({
+            "model_type": "qwen2_vl",
+            "vision_config": {"temporal_patch_size": 4}
+        });
+        let metadata = ModelMetadata {
+            model_id: "Qwen2-VL-7B",
+            tokenizer: &tokenizer,
+            config: &config,
+        };
+        let video_config = ModelRegistry::new().video_fetch_config(&metadata).unwrap();
+        let indices = sample_video_frame_indices(
+            VideoFrameMetadata {
+                total_frames: 75,
+                original_fps: 25.0,
+            },
+            &video_config,
+        )
+        .unwrap();
+        assert_eq!(indices, vec![0, 18, 37, 56]);
     }
 }
