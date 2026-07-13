@@ -89,6 +89,7 @@ impl Qwen3VLProcessor {
                 min_pixels: DEFAULT_MIN_PIXELS,
                 max_pixels: DEFAULT_MAX_PIXELS,
                 temporal_patch_size: DEFAULT_TEMPORAL_PATCH_SIZE,
+                video_uses_temporal_pixel_budget: true,
                 mean: QWEN3_MEAN,
                 std: QWEN3_STD,
                 model_name: "qwen3-vl",
@@ -111,6 +112,7 @@ impl Qwen3VLProcessor {
                 min_pixels,
                 max_pixels,
                 temporal_patch_size,
+                video_uses_temporal_pixel_budget: true,
                 mean: QWEN3_MEAN,
                 std: QWEN3_STD,
                 model_name: "qwen3-vl",
@@ -135,6 +137,7 @@ impl Qwen3VLProcessor {
                 temporal_patch_size: config
                     .temporal_patch_size
                     .unwrap_or(DEFAULT_TEMPORAL_PATCH_SIZE),
+                video_uses_temporal_pixel_budget: true,
                 mean: QWEN3_MEAN,
                 std: QWEN3_STD,
                 model_name: "qwen3-vl",

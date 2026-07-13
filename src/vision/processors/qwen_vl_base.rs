@@ -69,6 +69,9 @@ pub struct QwenVLConfig {
     pub max_pixels: usize,
     /// Temporal patch size for video
     pub temporal_patch_size: usize,
+    /// Whether the video pixel budget applies to T * H * W (Qwen3) rather
+    /// than independently to each H * W frame (Qwen2).
+    pub video_uses_temporal_pixel_budget: bool,
     /// Normalization mean values
     pub mean: [f64; 3],
     /// Normalization std values
@@ -203,17 +206,20 @@ impl QwenVLProcessorBase {
         Ok((h_bar, w_bar))
     }
 
-    /// Smart resize for Qwen3-style video processors.
+    /// Smart resize using the model family's video pixel-budget semantics.
     ///
-    /// Unlike image resize, the pixel budget is applied to the full sampled
-    /// video volume (`T * H * W`), matching HuggingFace's Qwen3 video
-    /// processor.
+    /// Qwen2 applies the budget independently to each frame (`H * W`), while
+    /// Qwen3 applies it to the full sampled video volume (`T * H * W`).
     pub fn smart_resize_video(
         &self,
         num_frames: usize,
         height: usize,
         width: usize,
     ) -> Result<(usize, usize), TransformError> {
+        if !self.config.video_uses_temporal_pixel_budget {
+            return self.smart_resize(height, width);
+        }
+
         let factor = self.get_factor();
 
         if num_frames == 0 {
@@ -1042,6 +1048,7 @@ mod tests {
             min_pixels: 256 * 28 * 28,
             max_pixels: 1280 * 28 * 28,
             temporal_patch_size: 2,
+            video_uses_temporal_pixel_budget: false,
             mean: [0.5, 0.5, 0.5],
             std: [0.5, 0.5, 0.5],
             model_name: "test-qwen-vl",
@@ -1055,6 +1062,7 @@ mod tests {
             min_pixels: 1,
             max_pixels: 1024 * 1024,
             temporal_patch_size: 2,
+            video_uses_temporal_pixel_budget: true,
             mean: [0.5, 0.25, 0.75],
             std: [0.5, 0.25, 0.5],
             model_name: "test-qwen-vl-video",

@@ -22,10 +22,13 @@ use std::ops::Deref;
 use image::DynamicImage;
 
 use super::qwen_vl_base::{QwenVLConfig, QwenVLProcessorBase};
-use crate::vision::{
-    preprocessor_config::PreProcessorConfig,
-    processor::{PreprocessedEncoderInputs, VisionPreProcessor},
-    transforms::TransformError,
+use crate::{
+    types::RgbFrameRef,
+    vision::{
+        preprocessor_config::PreProcessorConfig,
+        processor::{PreprocessedEncoderInputs, VisionPreProcessor},
+        transforms::TransformError,
+    },
 };
 
 /// CLIP normalization mean values used by Qwen2-VL models.
@@ -85,6 +88,7 @@ impl Qwen2VLProcessor {
                 min_pixels: DEFAULT_MIN_PIXELS,
                 max_pixels: DEFAULT_MAX_PIXELS,
                 temporal_patch_size: DEFAULT_TEMPORAL_PATCH_SIZE,
+                video_uses_temporal_pixel_budget: false,
                 mean: CLIP_MEAN,
                 std: CLIP_STD,
                 model_name: "qwen2-vl",
@@ -107,6 +111,7 @@ impl Qwen2VLProcessor {
                 min_pixels,
                 max_pixels,
                 temporal_patch_size,
+                video_uses_temporal_pixel_budget: false,
                 mean: CLIP_MEAN,
                 std: CLIP_STD,
                 model_name: "qwen2-vl",
@@ -125,6 +130,7 @@ impl Qwen2VLProcessor {
                 temporal_patch_size: config
                     .temporal_patch_size
                     .unwrap_or(DEFAULT_TEMPORAL_PATCH_SIZE),
+                video_uses_temporal_pixel_budget: false,
                 mean: CLIP_MEAN,
                 std: CLIP_STD,
                 model_name: "qwen2-vl",
@@ -229,6 +235,24 @@ impl VisionPreProcessor for Qwen2VLProcessor {
     ) -> Result<PreprocessedEncoderInputs, TransformError> {
         let processor = self.with_preprocessor_config(config);
         processor.inner.preprocess(images, config)
+    }
+
+    fn preprocess_video(
+        &self,
+        frames: &[DynamicImage],
+        config: &PreProcessorConfig,
+    ) -> Result<PreprocessedEncoderInputs, TransformError> {
+        let processor = self.with_preprocessor_config(config);
+        processor.inner.preprocess_video(frames, config)
+    }
+
+    fn preprocess_video_rgb(
+        &self,
+        frames: &[RgbFrameRef<'_>],
+        config: &PreProcessorConfig,
+    ) -> Result<PreprocessedEncoderInputs, TransformError> {
+        let processor = self.with_preprocessor_config(config);
+        processor.inner.preprocess_video_rgb(frames, config)
     }
 
     fn calculate_num_tokens(&self, width: u32, height: u32, config: &PreProcessorConfig) -> usize {

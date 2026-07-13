@@ -88,6 +88,7 @@ impl MiniMaxM3Processor {
                 min_pixels,
                 max_pixels,
                 temporal_patch_size,
+                video_uses_temporal_pixel_budget: false,
                 mean: MINIMAX_M3_MEAN,
                 std: MINIMAX_M3_STD,
                 model_name: "minimax-m3",
